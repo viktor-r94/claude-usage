@@ -1,0 +1,24 @@
+{
+  "name": "claude-usage",
+  "version": "1.0.0",
+  "description": "A tiny macOS menu bar app showing your Claude.ai plan usage.",
+  "main": "main.js",
+  "author": "Viktor Rizak",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac --dir"
+  },
+  "build": {
+    "appId": "com.viktorrizak.claude-usage",
+    "productName": "Claude Usage",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": { "target": "dir", "arch": ["arm64"] }
+    },
+    "files": ["main.js", "preload.js", "popover.html"]
+  },
+  "devDependencies": {
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.2"
+  }
+}
