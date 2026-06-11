@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, session, nativeImage } = require('electron')
+const { app, BrowserWindow, Tray, Menu, ipcMain, session, nativeImage, powerMonitor } = require('electron')
 const path = require('path')
 
 let tray, popover, loginWin
@@ -68,6 +68,10 @@ function togglePopover() {
 app.whenReady().then(() => {
   createTray()
   createPopover()
+  powerMonitor.on('resume', () => {
+    tray?.destroy()
+    createTray()
+  })
 })
 
 app.on('window-all-closed', (e) => e.preventDefault())

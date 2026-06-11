@@ -1,6 +1,6 @@
 {
   "name": "claude-usage",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A tiny macOS menu bar app showing your Claude.ai plan usage.",
   "main": "main.js",
   "author": "Viktor Rizak",
