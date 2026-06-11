@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #1c1c1e;
+    color: #e8e8e3;
+    padding: 16px;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .header-title { font-size: 14px; font-weight: 600; }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .plan-badge {
+    font-size: 10px; font-weight: 500;
+    background: #1e3a2e; color: #4caf84;
+    padding: 2px 7px; border-radius: 10px;
+  }
+  .refresh-btn { background: none; border: none; color: #6e6e73; cursor: pointer; padding: 2px; display: flex; }
+  .refresh-btn:hover { color: #a0a09b; }
+  .refresh-btn.spinning svg { animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .usage-item { margin-bottom: 12px; }
+  .usage-top { display: flex; justify-content: space-between; margin-bottom: 5px; }
+  .usage-name { font-size: 13px; font-weight: 500; }
+  .usage-pct { font-size: 12px; color: #6e6e73; }
+  .usage-sub { font-size: 11px; color: #6e6e73; margin-bottom: 5px; }
+  .track { height: 5px; background: #2d2d2f; border-radius: 3px; overflow: hidden; }
+  .fill { height: 100%; background: #4a90e2; border-radius: 3px; transition: width .3s ease; }
+  .fill.warn { background: #e2a94a; }
+  .fill.danger { background: #e24a4a; }
+  .divider { height: 1px; background: #2a2a2c; margin: 12px 0; }
+  .footer { font-size: 11px; color: #6e6e73; margin-top: 12px; }
+  .center {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 12px; padding: 40px 0;
+    color: #6e6e73; font-size: 13px; text-align: center;
+  }
+  .btn { background: #4a90e2; color: #fff; border: none; border-radius: 7px; padding: 8px 20px; font-size: 13px; cursor: pointer; }
+  .btn:hover { background: #3a80d2; }
+</style>
+</head>
+<body>
+<div class="header">
+  <span class="header-title">Claude Usage</span>
+  <div class="header-right">
+    <span class="plan-badge" id="planBadge" style="display:none"></span>
+    <button class="refresh-btn" id="refreshBtn" title="Refresh">
+      <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M1 4v6h6M23 20v-6h-6"/>
+        <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+      </svg>
+    </button>
+  </div>
+</div>
+<div id="body"></div>
+
+<script src="../lib/utils.js"></script>
+<script>
+
+// Build a reusable usage item node and return an updater function.
+// On subsequent renders we call the updater instead of rebuilding the DOM.
+function makeUsageItem() {
+  const root = document.createElement('div')
+  root.className = 'usage-item'
+  root.innerHTML = `
+    <div class="usage-top">
+      <span class="usage-name"></span>
+      <span class="usage-pct"></span>
+    </div>
+    <div class="usage-sub"></div>
+    <div class="track"><div class="fill"></div></div>`
+  const name = root.querySelector('.usage-name')
+  const pct  = root.querySelector('.usage-pct')
+  const sub  = root.querySelector('.usage-sub')
+  const fill = root.querySelector('.fill')
+
+  return {
+    node: root,
+    update(nameVal, subVal, pctVal) {
+      name.textContent = nameVal
+      pct.textContent  = `${pctVal}% used`
+      sub.textContent  = subVal
+      sub.style.display = subVal ? '' : 'none'
+      fill.style.width = `${Math.min(pctVal, 100)}%`
+      fill.className   = `fill ${fillClass(pctVal)}`
+    },
+  }
+}
+
+const itemPool = []
+
+function getItem(index) {
+  if (!itemPool[index]) itemPool[index] = makeUsageItem()
+  return itemPool[index]
+}
+
+const bodyEl      = document.getElementById('body')
+const planBadge   = document.getElementById('planBadge')
+const refreshBtn  = document.getElementById('refreshBtn')
+const divider     = Object.assign(document.createElement('div'), { className: 'divider' })
+const footer      = Object.assign(document.createElement('div'), { className: 'footer' })
+
+function showState(html) {
+  bodyEl.innerHTML = html
+  fitWindow()
+}
+
+function renderData({ org, results }) {
+  if (org?.plan) {
+    planBadge.textContent  = org.plan
+    planBadge.style.display = ''
+  }
+
+  const okEntry = Object.entries(results || {}).find(([, r]) => r.status === 200 && r.data && typeof r.data === 'object')
+
+  if (!okEntry) {
+    let diag = '<div style="font-size:11px;color:#6e6e73;margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">Endpoint probe</div>'
+    for (const [path, r] of Object.entries(results || {}))
+      diag += `<div style="font-size:10px;color:#6e6e73;margin-bottom:6px"><b>${r.status}</b> ${esc(path)}</div>`
+    showState(diag)
+    return
+  }
+
+  const data = okEntry[1].data
+  // Compute all entries once — pctOf is not called twice per item
+  const entries = Object.entries(data).reduce((acc, [key, v]) => {
+    const p = pctOf(v)
+    if (p !== null) acc.push({ key, v, p })
+    return acc
+  }, [])
+
+  if (!entries.length) {
+    showState(`<pre style="font-size:10px;color:#6e6e73;white-space:pre-wrap;overflow:auto;max-height:300px">${esc(JSON.stringify(data, null, 2))}</pre>`)
+    return
+  }
+
+  // Update existing nodes in place; append new ones only if count grew.
+  bodyEl.innerHTML = ''
+  entries.forEach(({ key, v, p }, i) => {
+    const item = getItem(i)
+    item.update(prettyName(key), resetOf(v), p)
+    bodyEl.appendChild(item.node)
+  })
+  activeItems = entries.length
+
+  divider.textContent = ''
+  bodyEl.appendChild(divider)
+  footer.textContent = `Updated ${new Date().toLocaleTimeString()}`
+  bodyEl.appendChild(footer)
+  fitWindow()
+}
+
+function fitWindow() {
+  requestAnimationFrame(() => window.api.resize(document.body.scrollHeight + 16))
+}
+
+async function doRefresh() {
+  refreshBtn.classList.add('spinning')
+  const data = await window.api.fetchUsage()
+  refreshBtn.classList.remove('spinning')
+
+  if (data.error === 'not_logged_in') {
+    planBadge.style.display = 'none'
+    showState(`<div class="center"><p>Sign in to see your usage</p><button class="btn" id="loginBtn">Sign in to Claude</button></div>`)
+    document.getElementById('loginBtn').addEventListener('click', () => window.api.openLogin())
+  } else if (data.error) {
+    showState(`<div class="center" style="color:#e24a4a"><p>${esc(data.error)}</p><button class="btn" id="retryBtn">Retry</button></div>`)
+    document.getElementById('retryBtn').addEventListener('click', doRefresh)
+  } else {
+    renderData(data)
+  }
+}
+
+refreshBtn.addEventListener('click', doRefresh)
+window.api.onLoginDone(doRefresh)
+window.addEventListener('focus', doRefresh)
+</script>
+</body>
+</html>

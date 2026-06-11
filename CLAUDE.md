@@ -5,12 +5,16 @@ A macOS Electron menu bar app (tray icon + popover window) showing Claude.ai pla
 ## Architecture
 
 ```
-main.js        — Electron main process: tray, popover window, IPC handlers, API fetching
-preload.js     — Context bridge: exposes 4 IPC methods to the renderer (no raw ipcRenderer)
-popover.html   — Single-file renderer: styles + HTML + JS, no framework
+src/main.js               — Electron main process: tray, popover window, IPC handlers, API fetching
+src/preload.js            — Context bridge: exposes 4 IPC methods to the renderer (no raw ipcRenderer)
+src/lib/utils.js          — Pure helpers (esc, pctOf, fmtReset, planLabel…); dual CommonJS/browser export
+src/renderer/popover.html — Renderer: styles + HTML + JS, no framework; loads utils via <script src>
+tests/utils.test.js       — Jest unit tests for src/lib/utils.js
 ```
 
-No build step. `npm start` runs it directly with `electron .`.
+No build step for development. `npm start` runs it directly with `electron .`; `npm test` runs Jest; `npm run build` packages a macOS .app via electron-builder.
+
+Performance notes: usage rows are pooled DOM nodes updated in place (see `makeUsageItem` in popover.html); the org lookup is cached in `cachedOrg` (main.js) and invalidated when the login window closes.
 
 ## Key design decisions
 
