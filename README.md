@@ -30,6 +30,32 @@ On first launch click the **Claude** menu bar item → **Sign in to Claude**, lo
 
 To start it again after quitting: `npm start` from the project folder, or enable **Launch at Login** (right-click the menu bar item) so it starts automatically.
 
+## Build a double-clickable app (optional)
+
+```bash
+npm run build
+```
+
+Creates `dist/mac-arm64/Claude Usage.app` — move it to `/Applications` and launch it from there instead of the terminal. The bundle is unsigned, so on first open right-click it → **Open**.
+
+## Development
+
+```
+src/
+├── main.js          # Electron main process: tray, popover, IPC, API fetching
+├── preload.js       # Context bridge between main and renderer
+├── lib/utils.js     # Pure helpers (shared by main, renderer, and tests)
+└── renderer/
+    └── popover.html # Popover UI
+tests/               # Jest unit tests
+```
+
+```bash
+npm test
+```
+
+See [CLAUDE.md](CLAUDE.md) for architecture notes and design decisions.
+
 ## How it works
 
 The app reuses your Claude.ai login session and reads usage from the same internal endpoints the web app uses (`/api/organizations/.../usage_status`). Requests run inside a hidden Claude.ai browser context so they carry your cookies and pass Cloudflare exactly like the real web app. Nothing is sent anywhere except Claude.ai — your credentials never leave your machine.

@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain, session, nativeImage, powerMonitor } = require('electron')
 const path = require('path')
+const { planLabel } = require('./lib/utils')
 
 let tray, popover, loginWin
 
@@ -22,7 +23,7 @@ function buildTrayMenu() {
 function createTray() {
   const icon = nativeImage.createEmpty()
   tray = new Tray(icon)
-  tray.setTitle('Claude')
+  tray.setTitle('CU')
   tray.on('click', togglePopover)
   tray.on('right-click', () => {
     tray.popUpContextMenu(buildTrayMenu())
@@ -46,7 +47,8 @@ function createPopover() {
       contextIsolation: true,
     },
   })
-  popover.loadFile('popover.html')
+  popover.loadFile(path.join(__dirname, 'renderer/popover.html'))
+  popover.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   popover.on('blur', () => popover.hide())
 }
 
@@ -77,21 +79,24 @@ app.whenReady().then(() => {
 app.on('window-all-closed', (e) => e.preventDefault())
 
 app.on('before-quit', () => {
+  powerMonitor.removeAllListeners('resume')
   loginWin?.destroy()
   fetchWin?.destroy()
 })
 
 let fetchWin
 let fetchWinReady
+let cachedOrg = null
 
 async function getFetchWindow() {
   if (fetchWin && !fetchWin.isDestroyed()) return fetchWin
   if (!fetchWinReady) {
     fetchWinReady = (async () => {
       fetchWin = new BrowserWindow({ show: false })
-      // Must be a claude.ai-origin page: pageFetch uses relative /api paths,
-      // and this carries cookies + passes Cloudflare like the web app.
-      await fetchWin.loadURL('https://claude.ai')
+      // Minimal claude.ai-origin page — just enough to set the origin for
+      // relative /api fetches and carry session cookies. Avoids loading the
+      // full React SPA which downloads several MB of JS/CSS.
+      await fetchWin.loadURL('https://claude.ai/api/auth/current')
       fetchWinReady = null
     })()
   }
@@ -101,10 +106,10 @@ async function getFetchWindow() {
 
 // Run fetches inside the claude.ai page context — real browser request,
 // passes Cloudflare and carries cookies automatically.
-async function pageFetch(path) {
+async function pageFetch(apiPath) {
   const w = await getFetchWindow()
   return w.webContents.executeJavaScript(`
-    fetch(${JSON.stringify(path)}, { headers: { accept: 'application/json' } })
+    fetch(${JSON.stringify(apiPath)}, { headers: { accept: 'application/json' } })
       .then(r => r.text().then(body => {
         let json = null
         try { json = JSON.parse(body) } catch {}
@@ -120,17 +125,22 @@ ipcMain.handle('fetch-usage', async () => {
   if (!sessionKey) return { error: 'not_logged_in' }
 
   try {
-    const orgsRes = await pageFetch('/api/organizations')
-    if (orgsRes.status === 401 || orgsRes.status === 403) return { error: 'not_logged_in' }
-    const orgs = orgsRes.json
-    if (!Array.isArray(orgs) || !orgs.length) {
-      return { error: `organizations: HTTP ${orgsRes.status} ${orgsRes.body || ''}` }
+    if (!cachedOrg) {
+      const orgsRes = await pageFetch('/api/organizations')
+      if (orgsRes.status === 401 || orgsRes.status === 403) return { error: 'not_logged_in' }
+      const orgs = orgsRes.json
+      if (!Array.isArray(orgs) || !orgs.length) {
+        return { error: `organizations: HTTP ${orgsRes.status} ${orgsRes.body || ''}` }
+      }
+      const org = orgs.find(o => o.capabilities?.includes('chat')) || orgs[0]
+      cachedOrg = {
+        uuid: org.uuid,
+        name: org.name,
+        plan: planLabel(org.billing_type || org.rate_limit_tier || ''),
+      }
     }
-    // Prefer the personal/chat org (has a paprika/raven capability), else first
-    const org = orgs.find(o => o.capabilities?.includes('chat')) || orgs[0]
-    const orgId = org.uuid
 
-    // Probe the endpoints the web app uses for the Usage settings page
+    const { uuid: orgId, name, plan } = cachedOrg
     const candidates = [
       `/api/organizations/${orgId}/usage_status`,
       `/api/organizations/${orgId}/usage`,
@@ -138,19 +148,12 @@ ipcMain.handle('fetch-usage', async () => {
       `/api/bootstrap/${orgId}/statsig`,
     ]
     const results = {}
-    for (const path of candidates) {
-      const r = await pageFetch(path)
-      results[path] = { status: r.status, data: r.json ?? r.body }
+    for (const apiPath of candidates) {
+      const r = await pageFetch(apiPath)
+      results[apiPath] = { status: r.status, data: r.json ?? r.body }
       if (r.status === 200 && r.json) break
     }
-    const billingType = org.billing_type || org.rate_limit_tier || ''
-    const planLabel = {
-      stripe_subscription: 'Pro',
-      free: 'Free',
-      enterprise: 'Enterprise',
-      team: 'Team',
-    }[billingType] || billingType
-    return { org: { name: org.name, plan: planLabel }, results }
+    return { org: { name, plan }, results }
   } catch (e) {
     return { error: e.message }
   }
@@ -163,10 +166,15 @@ ipcMain.handle('resize', (e, height) => {
 })
 
 ipcMain.handle('open-login', () => {
+  if (loginWin && !loginWin.isDestroyed()) {
+    loginWin.focus()
+    return
+  }
   loginWin = new BrowserWindow({ width: 1000, height: 700 })
   loginWin.loadURL('https://claude.ai/login')
   loginWin.on('closed', () => {
     loginWin = null
+    cachedOrg = null  // clear org cache so next fetch re-resolves with fresh cookies
     popover.webContents.send('login-done')
   })
 })
